@@ -58,7 +58,6 @@ class GCNet_baseline(torch.nn.Module):
             x = conv(x, edge_index)
             x = self.dropout(x)
 
-        embeddings = x
         output = self.classifier(x)
 
-        return output
+        return output, x
