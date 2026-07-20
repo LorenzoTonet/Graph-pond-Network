@@ -1,7 +1,7 @@
 import torch
 import torch.nn.functional as F
 
-def pondering_loss(p, y, labels, step, mask, beta=0.01, prior_lambda=1/30, eps=1e-10):
+def pondering_loss(p, y, labels, mask, beta=0.01, prior_lambda=1/30, eps=1e-10, direct_kl = True):
     device = p.device
     n_steps = p.shape[0]
 
@@ -25,12 +25,20 @@ def pondering_loss(p, y, labels, step, mask, beta=0.01, prior_lambda=1/30, eps=1
     prior = prior / prior.sum()
     prior_expanded = prior.unsqueeze(1).expand(n_steps, num_nodes)
 
-    kl_reg = F.kl_div(
-        torch.log(prior_expanded + eps),
-        p_masked + eps,
-        reduction='none'
-    ).sum(dim=0).mean()
+    if direct_kl:
+        kl_reg = F.kl_div(
+            p_masked + eps,
+            torch.log(prior_expanded + eps),
+            reduction='none'
+        ).sum(dim=0).mean()
+    else:
+        kl_reg = F.kl_div(
+            torch.log(prior_expanded + eps),
+            p_masked + eps,
+            reduction='none'
+        ).sum(dim=0).mean()
 
     total_loss = rec_loss + beta * kl_reg
+
     return total_loss, rec_loss, kl_reg
 

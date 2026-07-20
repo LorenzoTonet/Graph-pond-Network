@@ -3,6 +3,7 @@ import torch.nn.functional as F
 import torch.nn as nn
 
 from torch_geometric.nn import GCNConv
+from torch_geometric.nn import global_mean_pool
 
 class MLP(nn.Module):
     '''
@@ -52,11 +53,47 @@ class GCNet_baseline(torch.nn.Module):
 
         self.classifier = torch.nn.Linear(hidden_dim, out_dim)
         self.dropout = torch.nn.Dropout(dropout)
+        self.relu = torch.nn.ReLU()
 
     def forward(self, x, edge_index):
         for conv in self.convs:
             x = conv(x, edge_index)
+            x = self.relu(x)
             x = self.dropout(x)
+
+        output = self.classifier(x)
+
+        return output, x
+
+
+class GCNet_baseline_g_classification(torch.nn.Module):
+    """Multi-layer Graph Convolutional Network for graph classification"""
+    def __init__(
+        self,
+        in_dim: int,
+        hidden_dim: int,
+        out_dim: int,
+        num_layers: int = 2,
+        dropout: float = 0.5,
+    ):
+        super().__init__()
+        self.convs = torch.nn.ModuleList()
+        self.convs.append(GCNConv(in_dim, hidden_dim))
+        for _ in range(num_layers - 1):
+            self.convs.append(GCNConv(hidden_dim, hidden_dim))
+
+        self.classifier = torch.nn.Linear(hidden_dim, out_dim)
+        self.dropout = torch.nn.Dropout(dropout)
+        self.relu = torch.nn.ReLU()
+
+    def forward(self, x, edge_index, batch):
+        for conv in self.convs:
+            x = conv(x, edge_index)
+            x = self.relu(x)
+            x = self.dropout(x)
+
+        
+        x = global_mean_pool(x, batch)
 
         output = self.classifier(x)
 

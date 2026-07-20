@@ -31,7 +31,7 @@ n_epochs = 100
 embedding_dim = 32
 max_steps = 8
 num_layers_step = 1
-dropout = 0.3
+dropout = 0.01
 hidden_dim_lin = 64
 
 #GCN baseline hyperparameters
@@ -44,7 +44,7 @@ prior_lambda = 1/5
 eps = 1e-10
 
 #optimizer hyperparameters
-learning_rate = 0.01
+learning_rate = 0.001
 weight_decay = 5e-4
 gradient_clipping = 0.5
 
@@ -92,8 +92,6 @@ model.train()
 baseline_model.train()
 
 for i in range(n_epochs):
-    optimizer.zero_grad()
-    baseline_optimizer.zero_grad()
 
     y, p, step, emb = model(data.x.to(device), data.edge_index.to(device))
     baseline_y, _ = baseline_model(data.x.to(device), data.edge_index.to(device))
@@ -145,8 +143,6 @@ for i in range(n_epochs):
     baseline_train_loss_list.append(baseline_loss.item())
     baseline_accuracy_list.append(baseline_accuracy)
     accuracy_list.append(accuracy)
-
-compute_pondering_accuracy(y, step, data.y.to(device), data.test_mask.to(device))
 
 plt.figure(figsize=(12, 6))
 plt.plot(train_loss_list, label='Train Loss', color='blue')
