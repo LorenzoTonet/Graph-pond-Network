@@ -92,7 +92,6 @@ class GCNet_baseline_g_classification(torch.nn.Module):
             x = self.relu(x)
             x = self.dropout(x)
 
-        
         x = global_mean_pool(x, batch)
 
         output = self.classifier(x)

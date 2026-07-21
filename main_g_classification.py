@@ -14,38 +14,13 @@ from torch_geometric.utils import to_undirected, degree
 from torch_scatter import scatter_add
 from torch_geometric.nn import GCNConv
 import pickle as pkl
+import torch_geometric.transforms as T
 
 from src.model import GCPondNet_g_classification
 from src.baseline import GCNet_baseline_g_classification
 from src.plots import *
-from src.losses import pondering_loss
+from src.losses import pondering_loss_g_classification
 from src.evaluation import compute_pondering_accuracy, compute_accuracy
-
-
-def pondering_loss_g_classification(logits, labels, p_n, beta, prior_lambda, eps=1e-10, direct_kl=True):
-    max_steps, batch_size = p_n.shape
-
-    rec_loss = 0.0
-    for i in range(max_steps):
-        ce = F.cross_entropy(logits[i], labels, reduction='none')
-        rec_loss += (ce * p_n[i]).mean()
-
-    steps = torch.arange(max_steps, device=p_n.device, dtype=p_n.dtype)
-    log_prior = torch.log(torch.tensor(prior_lambda)) + steps * torch.log(torch.tensor(1 - prior_lambda))
-    log_prior = torch.log_softmax(log_prior, dim=0)  # prior normalizzato in log-spazio
-
-    log_p = torch.log(p_n + eps)
-
-    reg_loss = 0.0
-    for i in range(batch_size):
-        if direct_kl:
-            reg_loss += F.kl_div(log_p[:, i], log_prior, log_target=True, reduction='sum')
-        else:
-            reg_loss += F.kl_div(log_prior, log_p[:, i], log_target=True, reduction='sum')
-
-    reg_loss = reg_loss / batch_size
-    total_loss = rec_loss + beta * reg_loss
-    return total_loss, rec_loss, reg_loss
 
 
 INFO = True
@@ -56,9 +31,9 @@ if INFO: print(f"[INFO] All libraries imported successfully.")
 n_epochs = 100
 
 #Ponder model hyperparameters
-embedding_dim = 16
+embedding_dim = 32
 max_steps = 8
-num_layers_step = 1
+num_layers_step = 2
 dropout = 0.3
 hidden_dim_lin = 64
 
@@ -67,19 +42,19 @@ baseline_hidden_dim = 32
 baseline_num_layers = 2
 
 # loss hyperparameters
-beta = 0.1
+beta = 0.01
 prior_lambda = 1/5
 eps = 1e-10
 
 #optimizer hyperparameters
-learning_rate = 0.001
+learning_rate = 0.01
 weight_decay = 5e-4
 gradient_clipping = 0.5
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 if INFO: print(f"[INFO] Device: {device}")
 
-dataset = TUDataset(root="./data/TUDataset", name="ENZYMES", transform=None)
+dataset = TUDataset(root="./data/TUDataset", name="MUTAG", transform=None, use_node_attr=True)
 
 if DEBUG: print(f"[DEBUG] dataset info: {dataset} | num_classes: {dataset.num_classes} | num_node_features: {dataset.num_node_features}")
 if INFO: print(f"[INFO] Dataset loaded: {dataset.name} with {len(dataset)} graphs.")
@@ -130,33 +105,50 @@ baseline_accuracy_list = []
 optimizer = Adam(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
 baseline_optimizer = Adam(baseline_model.parameters(), lr=learning_rate, weight_decay=weight_decay)
 
-model.train()
-baseline_model.train()
-
-for i in range(n_epochs):
+def train_one_epoch_ponder(model, train_loader, optimizer, gradient_clipping, device = "cpu"):
+    model.train()
     for batch in train_loader:
         batch = batch.to(device)
 
         y, p, step, emb = model(batch.x, batch.edge_index, batch.batch)
-        baseline_y, _ = baseline_model(batch.x, batch.edge_index, batch.batch)
 
-        loss, rec_loss, kl_reg = pondering_loss_g_classification(logits=y, labels=batch.y, p_n = p, beta=beta, prior_lambda=prior_lambda, eps=eps)
-        baseline_loss = F.cross_entropy(baseline_y, batch.y)
+        loss, rec_loss, kl_reg = pondering_loss_g_classification(logits=y, labels=batch.y, p_n = p, beta=beta, prior_lambda=prior_lambda, eps=eps, direct_kl=False)
 
-        #accuracy = compute_pondering_accuracy(y, step, batch.y)
-        #baseline_accuracy = compute_accuracy(baseline_y, batch.y)
+        train_accuracy = compute_pondering_accuracy(y, step, batch.y)
 
         optimizer.zero_grad()
         loss.backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm = gradient_clipping)
         optimizer.step()
 
-        
-        baseline_optimizer.zero_grad()
-        baseline_loss.backward()
-        torch.nn.utils.clip_grad_norm_(baseline_model.parameters(), max_norm = gradient_clipping)
-        baseline_optimizer.step()
+    
+    return loss, rec_loss, kl_reg, train_accuracy
 
+def train_one_epoch_baseline(model, train_loader, optimizer, gradient_clipping, device = "cpu"):
+    model.train()
+    for batch in train_loader:
+        batch = batch.to(device)
+
+        baseline_y, _ = model(batch.x, batch.edge_index, batch.batch)
+
+        baseline_loss = F.cross_entropy(baseline_y, batch.y)
+
+        train_accuracy = compute_accuracy(baseline_y, batch.y)
+
+        
+        optimizer.zero_grad()
+        baseline_loss.backward()
+        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm = gradient_clipping)
+        optimizer.step()
+
+    return baseline_loss, train_accuracy
+
+
+for i in range(n_epochs):
+    loss, rec_loss, kl_reg, train_accuracy = train_one_epoch_ponder(model=model, train_loader=train_loader, optimizer=optimizer, gradient_clipping = gradient_clipping)
+
+    baseline_loss, baseline_train_accuracy = train_one_epoch_baseline(model= baseline_model, train_loader = train_loader, optimizer = baseline_optimizer,
+                                                                      gradient_clipping=gradient_clipping, device = "cpu")
     if INFO:
         print(f"[INFO] Epoch {i+1}/{n_epochs} | Pondering Loss: {loss.item():.4f} | Rec Loss: {rec_loss.item():.4f} | KL Reg: {kl_reg.item():.4f}")
         print(f"[INFO] Epoch {i+1}/{n_epochs} | Baseline Loss: {baseline_loss.item():.4f}")
@@ -170,20 +162,21 @@ for i in range(n_epochs):
                 y, p, step, emb = model(batch.x, batch.edge_index, batch.batch)
                 baseline_y, _ = baseline_model(batch.x, batch.edge_index, batch.batch)
 
-                val_loss, val_rec_loss, val_kl_reg = pondering_loss_g_classification(logits=y, labels=batch.y, p_n = p, beta=beta, prior_lambda=prior_lambda, eps=eps)
+                val_loss, val_rec_loss, val_kl_reg = pondering_loss_g_classification(logits=y, labels=batch.y, p_n = p, beta=beta, prior_lambda=prior_lambda, eps=eps,direct_kl=False)
                 baseline_val_loss = F.cross_entropy(baseline_y, batch.y)
-
 
                 if INFO:
                     print(f"[INFO] Validation | Pondering Loss: {val_loss.item():.4f} | Rec Loss: {val_rec_loss.item():.4f} | KL Reg: {val_kl_reg.item():.4f}")
                     print(f"[INFO] Validation | Baseline Loss: {baseline_val_loss.item():.4f}")
-        
+                
+                
+
         model.train()
         baseline_model.train()
 
     val_loss_list.append(val_loss.item())
-    train_loss_list.append(loss.item())
     baseline_val_loss_list.append(baseline_val_loss.item())
+    train_loss_list.append(loss.item())
     baseline_train_loss_list.append(baseline_loss.item())
     #baseline_accuracy_list.append(baseline_accuracy)
     #accuracy_list.append(accuracy)

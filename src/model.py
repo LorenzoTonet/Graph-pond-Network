@@ -197,8 +197,7 @@ class GCPondNet_g_classification(torch.nn.Module):
             new_graph_embedding = global_mean_pool(embedding, batch)
 
             concat = torch.cat([new_graph_embedding, h], 1)
-            new_h = self.mlp(concat)
-            h = torch.where(is_halted.unsqueeze(1), h, new_h)  # freeze se il grafo ha già halted
+            h = self.mlp(concat)
 
             if not self.training and is_halted.all():
                 break

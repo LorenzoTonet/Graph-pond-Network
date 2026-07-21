@@ -97,7 +97,7 @@ for i in range(n_epochs):
     baseline_y, _ = baseline_model(data.x.to(device), data.edge_index.to(device))
 
 
-    loss, rec_loss, kl_reg = pondering_loss(p, y, data.y.to(device), step, data.train_mask.to(device), beta=beta, prior_lambda=prior_lambda, eps=eps)
+    loss, rec_loss, kl_reg = pondering_loss(p, y, data.y.to(device), data.train_mask.to(device), beta=beta, prior_lambda=prior_lambda, eps=eps, direct_kl=True)
     baseline_loss = F.cross_entropy(baseline_y[data.train_mask], data.y[data.train_mask].to(device))
 
     accuracy = compute_pondering_accuracy(y, step, data.y.to(device), data.train_mask.to(device))
@@ -126,7 +126,7 @@ for i in range(n_epochs):
             y, p, step, emb = model(data.x.to(device), data.edge_index.to(device))
             baseline_y, _ = baseline_model(data.x.to(device), data.edge_index.to(device))
 
-            val_loss, val_rec_loss, val_kl_reg = pondering_loss(p, y, data.y.to(device), step, data.val_mask.to(device), beta=beta, prior_lambda=prior_lambda, eps=eps)
+            val_loss, val_rec_loss, val_kl_reg = pondering_loss(p, y, data.y.to(device), data.val_mask.to(device), beta=beta, prior_lambda=prior_lambda, eps=eps, direct_kl=True)
             baseline_val_loss = F.cross_entropy(baseline_y[data.val_mask], data.y[data.val_mask].to(device))
 
 
