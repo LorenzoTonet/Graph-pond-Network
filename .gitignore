@@ -1,2 +1,4 @@
 /data/
 src/__pycache__/
+src/graph_classification/__pycache__/
+src/node_classification/__pycache__/

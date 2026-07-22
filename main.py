@@ -1,24 +1,16 @@
-import numpy as np
-import networkx as nx
 import matplotlib.pyplot as plt
-import matplotlib.colors as mcolors
-from sklearn.manifold import TSNE
-
 import torch
 import torch.nn.functional as F
-import torch.nn as nn
-from torch.optim import Adam
-from torch_geometric.datasets import Planetoid, WebKB, WikipediaNetwork
-from torch_geometric.utils import to_undirected, degree
-from torch_scatter import scatter_add
-from torch_geometric.nn import GCNConv
-import pickle as pkl
 
-from src.model import GCPondNet, GCPondNet_SoftHalting
-from src.baseline import GCNet_baseline
-from src.plots import *
-from src.losses import pondering_loss
-from src.evaluation import compute_pondering_accuracy, compute_accuracy
+from torch.optim import Adam
+from torch_geometric.datasets import Planetoid
+
+from src.node_classification.models import GCPondNet, GCNet_baseline
+from src.node_classification.plots import *
+from src.node_classification.loss import pondering_loss
+from src.node_classification.evaluation import compute_pondering_accuracy, compute_accuracy
+from src.metrics import oversmoothing_metric
+
 
 INFO = True
 DEBUG = True
@@ -41,7 +33,8 @@ baseline_num_layers = 2
 # loss hyperparameters
 beta = 0.1
 prior_lambda = 1/5
-eps = 1e-10
+eps = 1e-8
+direct_kl = False
 
 #optimizer hyperparameters
 learning_rate = 0.001
@@ -97,7 +90,7 @@ for i in range(n_epochs):
     baseline_y, _ = baseline_model(data.x.to(device), data.edge_index.to(device))
 
 
-    loss, rec_loss, kl_reg = pondering_loss(p, y, data.y.to(device), data.train_mask.to(device), beta=beta, prior_lambda=prior_lambda, eps=eps, direct_kl=True)
+    loss, rec_loss, kl_reg = pondering_loss(p, y, data.y.to(device), data.train_mask.to(device), beta=beta, prior_lambda=prior_lambda, eps=eps, direct_kl=direct_kl)
     baseline_loss = F.cross_entropy(baseline_y[data.train_mask], data.y[data.train_mask].to(device))
 
     accuracy = compute_pondering_accuracy(y, step, data.y.to(device), data.train_mask.to(device))
@@ -126,7 +119,8 @@ for i in range(n_epochs):
             y, p, step, emb = model(data.x.to(device), data.edge_index.to(device))
             baseline_y, _ = baseline_model(data.x.to(device), data.edge_index.to(device))
 
-            val_loss, val_rec_loss, val_kl_reg = pondering_loss(p, y, data.y.to(device), data.val_mask.to(device), beta=beta, prior_lambda=prior_lambda, eps=eps, direct_kl=True)
+            val_loss, val_rec_loss, val_kl_reg = pondering_loss(p, y, data.y.to(device), data.val_mask.to(device), beta=beta, prior_lambda=prior_lambda, eps=eps,
+                                                                 direct_kl=direct_kl)
             baseline_val_loss = F.cross_entropy(baseline_y[data.val_mask], data.y[data.val_mask].to(device))
 
 
@@ -180,9 +174,6 @@ print(p[:, 1])
 
 # with open("pd_df_graph_topological_metrics.pkl", "rb") as file:
 #     df = pkl.load(file)
-
-
-from src.metrics import oversmoothing_metric
 
 adj_torch_sparse = torch.sparse_coo_tensor(
     data.edge_index, 

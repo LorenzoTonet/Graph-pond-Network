@@ -1,34 +1,22 @@
-import numpy as np
-import networkx as nx
 import matplotlib.pyplot as plt
-import matplotlib.colors as mcolors
-from sklearn.manifold import TSNE
-
+import networkx as nx
 import torch
 import torch.nn.functional as F
-import torch.nn as nn
 from torch.optim import Adam
 from torch_geometric.loader import DataLoader
-from torch_geometric.datasets import Planetoid, WebKB, WikipediaNetwork, TUDataset
-from torch_geometric.utils import to_undirected, degree
-from torch_scatter import scatter_add
-from torch_geometric.nn import GCNConv
-import pickle as pkl
-import torch_geometric.transforms as T
+from torch_geometric.datasets import TUDataset
+from torch_geometric.utils import to_networkx
 
-from src.model import GCPondNet_g_classification
-from src.baseline import GCNet_baseline_g_classification
-from src.plots import *
-from src.losses import pondering_loss_g_classification
-from src.evaluation import compute_pondering_accuracy, compute_accuracy
-
+from src.graph_classification.models import GCPondNet_g_classification, GCNet_baseline_g_classification
+from src.graph_classification.loss import pondering_loss_g_classification
+from src.graph_classification.evaluation import evaluate_baseline_accuracy, evaluate_pondering_accuracy
 
 INFO = True
 DEBUG = True
 
 if INFO: print(f"[INFO] All libraries imported successfully.")
 
-n_epochs = 100
+n_epochs = 1
 
 #Ponder model hyperparameters
 embedding_dim = 32
@@ -47,7 +35,7 @@ prior_lambda = 1/5
 eps = 1e-10
 
 #optimizer hyperparameters
-learning_rate = 0.01
+learning_rate = 0.001
 weight_decay = 5e-4
 gradient_clipping = 0.5
 
@@ -102,6 +90,8 @@ baseline_train_loss_list = []
 baseline_val_loss_list = []
 baseline_accuracy_list = []
 
+avg_halting_step = []
+
 optimizer = Adam(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
 baseline_optimizer = Adam(baseline_model.parameters(), lr=learning_rate, weight_decay=weight_decay)
 
@@ -111,18 +101,14 @@ def train_one_epoch_ponder(model, train_loader, optimizer, gradient_clipping, de
         batch = batch.to(device)
 
         y, p, step, emb = model(batch.x, batch.edge_index, batch.batch)
-
         loss, rec_loss, kl_reg = pondering_loss_g_classification(logits=y, labels=batch.y, p_n = p, beta=beta, prior_lambda=prior_lambda, eps=eps, direct_kl=False)
-
-        train_accuracy = compute_pondering_accuracy(y, step, batch.y)
 
         optimizer.zero_grad()
         loss.backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm = gradient_clipping)
         optimizer.step()
 
-    
-    return loss, rec_loss, kl_reg, train_accuracy
+    return loss, rec_loss, kl_reg
 
 def train_one_epoch_baseline(model, train_loader, optimizer, gradient_clipping, device = "cpu"):
     model.train()
@@ -132,23 +118,22 @@ def train_one_epoch_baseline(model, train_loader, optimizer, gradient_clipping, 
         baseline_y, _ = model(batch.x, batch.edge_index, batch.batch)
 
         baseline_loss = F.cross_entropy(baseline_y, batch.y)
-
-        train_accuracy = compute_accuracy(baseline_y, batch.y)
-
         
         optimizer.zero_grad()
         baseline_loss.backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm = gradient_clipping)
         optimizer.step()
-
-    return baseline_loss, train_accuracy
-
+ 
+    return baseline_loss
 
 for i in range(n_epochs):
-    loss, rec_loss, kl_reg, train_accuracy = train_one_epoch_ponder(model=model, train_loader=train_loader, optimizer=optimizer, gradient_clipping = gradient_clipping)
+    loss, rec_loss, kl_reg = train_one_epoch_ponder(model=model, train_loader=train_loader, optimizer=optimizer, gradient_clipping = gradient_clipping)
+    train_accuracy, avg_step = evaluate_pondering_accuracy(model=model, loader=train_loader, device=device)
 
-    baseline_loss, baseline_train_accuracy = train_one_epoch_baseline(model= baseline_model, train_loader = train_loader, optimizer = baseline_optimizer,
-                                                                      gradient_clipping=gradient_clipping, device = "cpu")
+    baseline_loss = train_one_epoch_baseline(model= baseline_model, train_loader = train_loader, optimizer = baseline_optimizer,
+                                                                 gradient_clipping=gradient_clipping, device = "cpu")
+    baseline_train_accuracy = evaluate_baseline_accuracy(model=baseline_model, loader=train_loader, device=device)
+
     if INFO:
         print(f"[INFO] Epoch {i+1}/{n_epochs} | Pondering Loss: {loss.item():.4f} | Rec Loss: {rec_loss.item():.4f} | KL Reg: {kl_reg.item():.4f}")
         print(f"[INFO] Epoch {i+1}/{n_epochs} | Baseline Loss: {baseline_loss.item():.4f}")
@@ -168,18 +153,18 @@ for i in range(n_epochs):
                 if INFO:
                     print(f"[INFO] Validation | Pondering Loss: {val_loss.item():.4f} | Rec Loss: {val_rec_loss.item():.4f} | KL Reg: {val_kl_reg.item():.4f}")
                     print(f"[INFO] Validation | Baseline Loss: {baseline_val_loss.item():.4f}")
-                
-                
 
         model.train()
         baseline_model.train()
 
+    
+    avg_halting_step.append(avg_step)
     val_loss_list.append(val_loss.item())
     baseline_val_loss_list.append(baseline_val_loss.item())
     train_loss_list.append(loss.item())
     baseline_train_loss_list.append(baseline_loss.item())
-    #baseline_accuracy_list.append(baseline_accuracy)
-    #accuracy_list.append(accuracy)
+    baseline_accuracy_list.append(baseline_train_accuracy)
+    accuracy_list.append(train_accuracy)
 
 plt.figure(figsize=(12, 6))
 plt.plot(train_loss_list, label='Train Loss', color='blue')
@@ -200,5 +185,16 @@ plt.xlabel('Epochs')
 plt.ylabel('Accuracy')
 plt.legend()
 plt.grid()
+
+graph = next(iter(test_loader))[1]
+
+print(graph.x)
+print(graph.edge_index)
+print(graph.y)
+G = to_networkx(graph)
+
+layout = nx.kamada_kawai_layout(G)
+
+nx.draw(G, pos = layout)
 
 plt.show()
